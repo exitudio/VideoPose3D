@@ -15,6 +15,36 @@ from data_utils import suggest_metadata
 
 output_prefix_2d = 'data_2d_custom_'
 
+def add_reverse(keypoints):
+    flipped = np.flip(keypoints, axis=0)
+    half_idx = int(flipped.shape[0]/2)
+    prepend = flipped[half_idx:]
+    append = flipped[:half_idx]
+    return np.concatenate((prepend, keypoints, append))
+
+def get_first_repeat_true(mask):
+    for i in range(mask.shape[0]-1):
+        if mask[i] == mask[i+1] and mask[i]:
+            return i
+    return 100000
+    
+def get_mask_by_prob(skeletons):
+    kps_prob = skeletons[:,:,3].mean(axis=1)
+    mask = kps_prob>.12
+    first_id = get_first_repeat_true(mask)
+    last_id = mask.shape[0] - get_first_repeat_true(np.flip(mask))
+    mask = np.zeros_like(mask)
+    mask[first_id:last_id] = True
+    return mask
+
+def mask_n_reverse(data, video_metadata):
+    keypoints = data[0]['keypoints']
+    mask = get_mask_by_prob(keypoints)
+    keypoints = add_reverse(keypoints[mask])
+    keypoints = keypoints[:,:,:2]
+    return [{'keypoints': keypoints}], video_metadata
+
+
 def decode(filename):
     # Latin1 encoding because Detectron runs on Python 2.7
     print('Processing {}'.format(filename))
@@ -38,7 +68,7 @@ def decode(filename):
         
     bb = np.array(results_bb, dtype=np.float32)
     kp = np.array(results_kp, dtype=np.float32)
-    kp = kp[:, :, :2] # Extract (x, y)
+    kp = kp[:, :, :4] # Extract (x, y)
     
     # Fix missing bboxes/keypoints by linear interpolation
     mask = ~np.isnan(bb[:, 0])
@@ -88,7 +118,9 @@ if __name__ == '__main__':
     file_list = glob(args.input + '/*.npz')
     for f in file_list:
         canonical_name = os.path.splitext(os.path.basename(f))[0]
-        data, video_metadata = decode(f)
+        data, video_metadata = mask_n_reverse(*decode(f)) # need to reverse line71 to "kp[:, :, :2]"
+        if data[0]['keypoints'].shape[0] == 0:
+            continue
         output[canonical_name] = {}
         output[canonical_name]['custom'] = [data[0]['keypoints'].astype('float32')]
         metadata['video_metadata'][canonical_name] = video_metadata
